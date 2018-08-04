@@ -2,6 +2,7 @@ import string
 from flask import Flask, request, Response
 from flask_restful import Resource, Api, abort, reqparse
 import random
+from flask_restful.representations import json
 
 app = Flask(__name__)
 api = Api(app)
@@ -30,6 +31,21 @@ class Mastermind(object):
         return self.check_guess(guess)
 
     def check_guess(self, guess):
+        result = self.check_guess_dict(guess)
+        return "exact: {}\tnear: {}\tsolved: {}".format(result['exact'], result['near'], result['solved'])
+
+    def make_guess_dict(self, guess):
+        print("Making a guess: {}".format(guess))
+
+        self.history[self.guess_id] = guess
+        self.guess_id += 1
+
+        if guess == self.colours:
+            self.solved = True
+
+        return self.check_guess_dict(guess)
+
+    def check_guess_dict(self, guess):
         # this should be the number of correct colours and the correct positions.
         near = 0
         exact = 0
@@ -40,8 +56,7 @@ class Mastermind(object):
                 near += 1
 
         self.solved = (guess[0:len(self.colours)] == self.colours)
-
-        return "exact: {}\tnear: {}\tsolved: {}".format(exact, near, self.solved)
+        return {'exact': exact, 'near': near, 'solved': self.solved}
 
 
 games = {}
@@ -50,6 +65,46 @@ games = {}
 def abort_if_game_doesnt_exist(game_id):
     if game_id not in games:
         abort(404, message="Mastermind game with ID: {} doesn't exist\n".format(game_id))
+
+
+class JsonMastermindGame(Resource):
+    def post(self):
+
+        game_id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
+        games[game_id] = Mastermind()
+        result = {'game': game_id}
+
+        return Response(json.dumps(result), status=201,  mimetype='application/json')
+
+    def get(self, game_id=None):
+        abort_if_game_doesnt_exist(game_id)
+
+        result = {}
+        for k in games[game_id].history:
+            result[k + 1] = {
+                'guess':games[game_id].history[k],
+                'result':  games[game_id].check_guess_dict(games[game_id].history[k]),
+             }
+        return Response(json.dumps(result), status=200, mimetype='application/json')
+
+    def put(self, game_id=None):
+        result = {}
+        abort_if_game_doesnt_exist(game_id)
+
+        if request.headers['Content-Type'] == 'application/json':
+            data = request.get_json()
+
+            if "guess" not in data:
+                result['error'] = "I can't find your guess -- Have you set your guess?"
+                return Response(json.dumps(result), status=400, mimetype='application/json')
+
+            guess = data['guess']
+            result['guess'] = guess
+            result['result'] = games[game_id].make_guess_dict(guess)
+            return Response(json.dumps(result), status=201, mimetype='application/json')
+
+        result['error'] = "I don't understand the request -- is the Content-Type correct?"
+        return Response(json.dumps(result), status=400, mimetype='application/json')
 
 
 class MastermindGame(Resource):
@@ -159,6 +214,7 @@ api.add_resource(Help, '/help/')
 # put - makes a new guess
 # get - retrieves the history of the game and if it's been solved
 api.add_resource(MastermindGame, '/game/', '/game/<string:game_id>/', )
+api.add_resource(JsonMastermindGame, '/mastermind/', '/mastermind/<string:game_id>/', )
 
 if __name__ == '__main__':
     app.debug = True
